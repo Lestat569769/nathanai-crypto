@@ -131,7 +131,7 @@ async def listen(
                     except json.JSONDecodeError:
                         log.debug("non-JSON message: %s", str(raw)[:60])
                     except Exception as e:
-                        log.debug("dispatch error: %s", e)
+                        log.warning("dispatch error: %s", e)
 
         except websockets.ConnectionClosed as e:
             log.warning("PumpPortal disconnected (%s) — retrying in %ds", e.code, backoff)

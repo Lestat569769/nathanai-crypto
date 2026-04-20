@@ -73,10 +73,12 @@ def parse_report(report: dict) -> dict:
     if not report:
         return _empty_result()
 
-    token       = report.get("token", {})
-    top_holders = report.get("topHolders", [])
-    risks       = report.get("risks", [])
-    lockers     = report.get("lockers", [])
+    # Use `or {}` / `or []` to guard against API returning null for these fields
+    # on very new tokens (report.get("token", {}) returns None when key="token": null)
+    token       = report.get("token") or {}
+    top_holders = report.get("topHolders") or []
+    risks       = report.get("risks") or []
+    lockers     = report.get("lockers") or []
 
     # ── Core danger flags ─────────────────────────────────────────────
     mint_authority   = token.get("mintAuthority") not in (None, "")
@@ -93,7 +95,7 @@ def parse_report(report: dict) -> dict:
 
     # ── Insider network detection ─────────────────────────────────────
     insider_detected = report.get("graphInsidersDetected", False)
-    insider_networks = report.get("insiderNetworks", [])
+    insider_networks = report.get("insiderNetworks") or []
 
     # ── Risk list (danger / warning / info) ───────────────────────────
     risk_flags = []
@@ -105,7 +107,7 @@ def parse_report(report: dict) -> dict:
         risk_score_penalty += SEVERITY_WEIGHTS.get(level, 1)
 
     # ── Creator history ───────────────────────────────────────────────
-    creator_tokens    = report.get("creatorTokens", [])
+    creator_tokens    = report.get("creatorTokens") or []
     creator_graduates = sum(1 for t in creator_tokens if t.get("graduated", False))
     creator_rugs      = sum(1 for t in creator_tokens if t.get("rugged", False))
     creator_total     = len(creator_tokens)
