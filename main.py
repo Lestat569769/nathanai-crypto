@@ -23,19 +23,36 @@ def parse_args():
 
 
 async def run_collect():
-    from collectors.pumpfun_ws import listen
+    import os
+    from neo4j import AsyncGraphDatabase
+    from collectors.solana_ws import listen
+    from graph.schema import init_schema
+    from graph.ingest import GraphIngester
 
-    def on_new_token(event):
-        status = "HARD SKIP" if event.get("hard_skip") else "QUEUED"
-        print(f"[collector] {status} | {event['name']} ({event['ticker']}) | mint={event['mint'][:8]}")
+    # Connect to Neo4j and ensure schema is ready
+    neo4j_uri  = os.getenv("NEO4J_URI",      "bolt://neo4j:7687")
+    neo4j_user = os.getenv("NEO4J_USER",     "neo4j")
+    neo4j_pass = os.getenv("NEO4J_PASSWORD", "crypto123")
+    driver     = AsyncGraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_pass))
+    await init_schema(driver)
+    ingester = GraphIngester(driver)
 
-    def on_trade(event):
-        pass  # TODO: update bonding curve snapshot in Neo4j
+    print("[collector] Neo4j ready — listening for pump.fun token launches...")
 
-    def on_graduation(event):
-        print(f"[collector] GRADUATED | {event.get('name')} | mint={event.get('mint','')[:8]}")
+    async def on_new_token(event):
+        status = "HARD SKIP" if event.get("hard_skip") else "QUEUED "
+        name   = event.get("name", "?") or "?"
+        ticker = event.get("ticker", "?") or "?"
+        mint   = event.get("mint", "")
+        print(f"[collector] {status} | {name} ({ticker}) | mint={mint[:8]}")
+        # Write to Neo4j (both skipped and queued — all are training data)
+        await ingester.upsert_token(event)
 
-    await listen(on_new_token=on_new_token, on_trade=on_trade, on_graduation=on_graduation)
+    async def on_graduation(event):
+        sig  = event.get("signature", "")[:12]
+        print(f"[collector] GRADUATED | sig={sig}")
+
+    await listen(on_new_token=on_new_token, on_graduation=on_graduation)
 
 
 async def run_validate():
