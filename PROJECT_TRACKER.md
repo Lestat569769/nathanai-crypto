@@ -1,6 +1,6 @@
 # NathanAI Crypto Bot — Project Tracker
 **Last Updated:** 2026-04-22
-**Status:** Active Development — Phase 1 (Data Pipeline)
+**Status:** Active Development — Phase 3 Complete (LLM Adapter)
 
 ---
 
@@ -131,6 +131,11 @@ qwen3:8b (no-think) → BUY/SKIP + confidence + JSON reasoning
 | collectors/sol_context.py | 2026-04-21 | SOL price (CoinGecko) + Fear & Greed (alternative.me) + RSS headlines, 5-min cache |
 | collectors/smart_money.py | 2026-04-22 | Two-tier wallet reputation: manual JSON + Neo4j auto-discovery (grad_rate≥40%, 5+ launches) |
 | data/smart_money.json | 2026-04-22 | Curated wallet list (empty seed, populated from observations) |
+| adapter/decision_parser.py | 2026-04-22 | Parse + validate BUY/SKIP JSON from LLM — handles raw/markdown/embedded JSON, schema + calibration checks |
+| adapter/prompt_builder.py | 2026-04-22 | Assembles all signals (rugcheck, dev, bonding curve, similar tokens, whale signals, market context) → Ollama chat messages |
+| adapter/inference.py | 2026-04-22 | qwen3:8b primary + qwen3:4b gate via Ollama /api/chat, no-think mode, retry logic |
+| adapter/validator.py | 2026-04-22 | Hallucination gate — qwen3:4b cross-checks primary reasoning against raw facts |
+| main.py (paper mode) | 2026-04-22 | Full pipeline wired: collect → LLM decision → gate → Signal node in Neo4j |
 | Docker stack | 2026-04-20 | docker-compose.yml, Dockerfile, requirements.txt |
 | graph/schema.py | 2026-04-20 | All constraints, indexes, vector indexes — applied to live Neo4j |
 | graph/ingest.py | 2026-04-20 | GraphIngester: upsert_token, upsert_wallet, write_signal, write_trade, vector similarity search |
@@ -159,14 +164,21 @@ qwen3:8b (no-think) → BUY/SKIP + confidence + JSON reasoning
 | scripts/backfill_history.py | MEDIUM | One-time run: load historical data into Neo4j |
 | graph/queries.py | MEDIUM | Analytics queries — grad rate by rugcheck score, etc. |
 
-### 📋 PENDING — Phase 3 (LLM Adapter)
+### ✅ COMPLETE — Phase 3 (LLM Adapter)
+
+All four adapter modules built and wired into paper trading mode.
+
+| Item | Notes |
+|------|-------|
+| adapter/decision_parser.py | ✅ Done |
+| adapter/prompt_builder.py | ✅ Done |
+| adapter/inference.py | ✅ Done |
+| adapter/validator.py | ✅ Done |
+
+### 📋 PENDING — Phase 3 Extras
 
 | Item | Priority | Notes |
 |------|----------|-------|
-| adapter/prompt_builder.py | HIGH | Assemble all signals → structured LLM prompt |
-| adapter/inference.py | HIGH | qwen3:8b via Ollama — BUY/SKIP + confidence |
-| adapter/validator.py | HIGH | qwen3:4b hallucination gate |
-| adapter/decision_parser.py | HIGH | Parse BUY/SKIP + confidence from model output |
 | training/nero_extract.py | MEDIUM | Generate thinking-chain Q&A from Neo4j history |
 | training/grpo_reward.py | MEDIUM | Graduation prediction reward function |
 
@@ -270,10 +282,10 @@ nathanai-crypto/
 │
 ├── adapter/
 │   ├── __init__.py
-│   ├── prompt_builder.py       📋 pending
-│   ├── inference.py            📋 pending
-│   ├── validator.py            📋 pending
-│   └── decision_parser.py      📋 pending
+│   ├── prompt_builder.py       ✅ all signals → Ollama chat messages
+│   ├── inference.py            ✅ qwen3:8b primary + qwen3:4b gate, no-think
+│   ├── validator.py            ✅ hallucination gate
+│   └── decision_parser.py      ✅ JSON parse + schema + calibration checks
 │
 ├── risk/
 │   ├── __init__.py
