@@ -1,7 +1,11 @@
 .env
+secrets/
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
 .DS_Store
 *.log
+logs/
+.pytest_cache/

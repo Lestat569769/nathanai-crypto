@@ -1,0 +1,29 @@
+# ── Data collection ───────────────────────────────────────────────────────
+httpx>=0.27.0              # async HTTP: rugcheck, DexScreener, CoinGecko, Birdeye
+websockets>=12.0           # pump.fun WebSocket
+yfinance>=0.2.38           # historical SOL OHLCV (no API key)
+feedparser>=6.0.11         # RSS news feeds (CoinDesk, Solana Foundation)
+
+# ── Neo4j ─────────────────────────────────────────────────────────────────
+neo4j>=5.19.0              # official Neo4j Python driver
+
+# ── Solana / on-chain execution ───────────────────────────────────────────
+solders>=0.21.0            # Rust-backed Solana types
+anchorpy-core>=0.1.0       # Anchor program interaction (pump.fun program)
+base58>=2.1.1              # base58 encoding for Solana addresses
+
+# ── LLM inference (Ollama) ────────────────────────────────────────────────
+ollama>=0.2.0              # official Ollama Python client
+
+# ── Utilities ─────────────────────────────────────────────────────────────
+pydantic>=2.7.0            # config validation + JSON schema enforcement
+pydantic-settings>=2.3.0   # .env → pydantic settings
+python-dotenv>=1.0.0       # .env file loading
+rich>=13.7.0               # terminal dashboard
+schedule>=1.2.1            # cron-style polling (SOL price, fear/greed)
+tenacity>=8.3.0            # retry logic with exponential backoff
+structlog>=24.1.0          # structured logging → JSON files
+
+# ── Testing ───────────────────────────────────────────────────────────────
+pytest>=8.2.0
+pytest-asyncio>=0.23.0
