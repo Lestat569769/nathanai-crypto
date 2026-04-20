@@ -44,7 +44,7 @@ RETRY_BACKOFF    = 3.0    # seconds between retries
 # Ollama generation options
 _PRIMARY_OPTIONS = {
     "temperature":   0.1,    # near-deterministic JSON output
-    "num_predict":   512,    # decision + 2-sentence reasoning
+    "num_predict":   1024,   # decision + 2-sentence reasoning (512 occasionally truncates)
     "top_p":         0.9,
     "repeat_penalty": 1.1,
     "think":         False,  # Qwen3 no-think mode (newer Ollama versions)

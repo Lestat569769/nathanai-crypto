@@ -322,18 +322,18 @@ async def run_paper():
     asyncio.create_task(_llm_worker())
 
     async def _enqueue(event: dict, trigger: str):
-        """Add to LLM queue. Each mint+trigger pair is queued at most once."""
+        """Add to LLM queue. Each mint+trigger pair is attempted at most once."""
         mint = event.get("mint", "")
         if not mint or not ollama_ok:
             return
-        # Use a set per mint so ALL previously-triggered milestones are remembered
         hits = milestones_hit.setdefault(mint, set())
         if trigger in hits:
             return
+        # Mark BEFORE the capacity check so a full queue never causes infinite retries
+        hits.add(trigger)
         if llm_queue.qsize() >= LLM_QUEUE_MAX:
             log.debug("LLM queue full — dropping %s [%s]", mint[:8], trigger)
             return
-        hits.add(trigger)
         await llm_queue.put((event, trigger))
         log.info("LLM queued [%s] %s (%s) — %d in queue",
                  trigger, event.get("name","?"), event.get("ticker","?"), llm_queue.qsize())
