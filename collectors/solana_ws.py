@@ -36,6 +36,7 @@ import logging
 import os
 import struct
 import httpx
+import base58 as base58lib
 import websockets
 from typing import Callable, Optional
 
@@ -50,15 +51,26 @@ PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY", "")
 
 def _get_ws_url() -> str:
-    # Always use free public RPC for WebSocket subscription —
-    # logsSubscribe fires on EVERY pump.fun tx (hundreds/hour).
-    # Using Helius here burns ~700K credits/month on free tier.
+    # Use Helius WebSocket for reliable event delivery.
+    # logsSubscribe on public RPC is unreliable — events drop silently.
+    # Credit cost: only logsSubscribe notifications, NOT getTransaction
+    # (getTransaction uses public RPC = 0 credits).
+    # Estimated: ~2000 pump.fun events/hour × 1 credit = 2000/hr = 48K/day
+    # = 1.44M/month. Over free limit of 1M.
+    # Mitigation: filter events BEFORE counting credits by checking logs
+    # for "Instruction:" patterns via WebSocket message itself (no extra call).
+    # Real fix: upgrade to Helius paid or use QuickNode free tier.
+    # For now: Helius free tier + accept potential monthly limit hit.
+    if HELIUS_API_KEY:
+        return f"wss://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
     return "wss://api.mainnet-beta.solana.com"
 
 def _get_rpc_url() -> str:
-    # Use Helius only for getTransaction — called once per NEW token create,
-    # not every trade. ~300-500 calls/hour = ~10K credits/day = safe on free tier.
-    if HELIUS_API_KEY:
+    # Public RPC — free for getTransaction too.
+    # Helius free tier burns 1 credit per getTransaction call.
+    # pump.fun creates ~1000+ tokens/day = 30K credits/month minimum.
+    # Keep Helius as emergency fallback only (set USE_HELIUS_RPC=true to enable).
+    if os.getenv("USE_HELIUS_RPC", "false").lower() == "true" and HELIUS_API_KEY:
         return f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
     return "https://api.mainnet-beta.solana.com"
 
@@ -77,21 +89,28 @@ def _decode_borsh_string(data: bytes, offset: int) -> tuple[str, int]:
     return value, offset + length
 
 
-def _parse_create_instruction(data_b64: str) -> Optional[dict]:
+def _parse_create_instruction(data_str: str) -> Optional[dict]:
     """
     Decode pump.fun Create instruction data (Anchor/Borsh encoding).
     Returns {"name": ..., "symbol": ..., "uri": ...} or None on failure.
 
+    Solana JSON encoding: instruction.data is base58-encoded.
     Instruction layout (after 8-byte Anchor discriminator):
-      name   : Borsh string
+      name   : Borsh string (4-byte LE length + UTF-8 bytes)
       symbol : Borsh string
       uri    : Borsh string
     """
     try:
-        data = base64.b64decode(data_b64)
+        # Try base58 first (Solana JSON encoding default)
+        try:
+            data = base58lib.b58decode(data_str)
+        except Exception:
+            # Fallback: try base64 (some RPC responses use this)
+            data = base64.b64decode(data_str + "==")
+
         if len(data) < 8:
             return None
-        offset = 8  # skip Anchor discriminator
+        offset = 8  # skip 8-byte Anchor discriminator
         name,   offset = _decode_borsh_string(data, offset)
         symbol, offset = _decode_borsh_string(data, offset)
         uri,    offset = _decode_borsh_string(data, offset)
@@ -169,7 +188,10 @@ def _extract_token_event(tx: dict, signature: str) -> Optional[dict]:
             return ""
 
         mint = account_at(0)
-        dev  = account_at(11)  # creator / fee payer
+
+        # Dev wallet: try instruction account[11] (creator), fall back to
+        # fee payer (accounts[0]) which is always the transaction signer
+        dev = account_at(11) or (accounts[0] if accounts else "")
 
         if not mint:
             return None
@@ -259,9 +281,9 @@ async def _handle_message(
     on_graduation: Optional[Callable],
 ) -> None:
     """Route a WebSocket notification to the appropriate handler."""
-    # Subscription confirmation — ignore
+    # Subscription confirmation
     if "result" in msg and isinstance(msg["result"], int):
-        log.debug("subscription confirmed, id=%d", msg["result"])
+        log.info("Subscription confirmed, id=%d — waiting for events...", msg["result"])
         return
 
     params = msg.get("params", {})
@@ -274,6 +296,9 @@ async def _handle_message(
 
     logs_str = " ".join(logs)
 
+    # Debug: print first 3 log lines of every pump.fun tx to learn format
+    log.info("PUMPFUN TX sig=%s logs=%s", sig[:12], logs[:3])
+
     # ── New token creation ────────────────────────────────────────────────
     if "Instruction: Create" in logs_str:
         await _handle_create(sig, on_new_token)
@@ -284,7 +309,11 @@ async def _handle_message(
         or "migration" in logs_str.lower()
     ):
         log.info("GRADUATION detected: sig=%s", sig[:12])
-        on_graduation({"signature": sig, "logs": logs})
+        import inspect
+        if inspect.iscoroutinefunction(on_graduation):
+            await on_graduation({"signature": sig, "logs": logs})
+        else:
+            on_graduation({"signature": sig, "logs": logs})
 
 
 async def _handle_create(sig: str, on_new_token: Callable) -> None:

@@ -22,10 +22,21 @@ def parse_args():
     return parser.parse_args()
 
 
+async def _profile_and_store_wallet(dev: str, ingester, driver):
+    """Background task: profile dev wallet and update Neo4j."""
+    from collectors.solana_rpc import get_wallet_profile
+    try:
+        profile = await get_wallet_profile(dev, driver)
+        if profile:
+            await ingester.upsert_wallet(dev, profile)
+    except Exception as e:
+        print(f"[collector] wallet profile error for {dev[:8]}: {e}")
+
+
 async def run_collect():
     import os
     from neo4j import AsyncGraphDatabase
-    from collectors.solana_ws import listen
+    from collectors.pumpportal_ws import listen
     from graph.schema import init_schema
     from graph.ingest import GraphIngester
 
@@ -44,9 +55,15 @@ async def run_collect():
         name   = event.get("name", "?") or "?"
         ticker = event.get("ticker", "?") or "?"
         mint   = event.get("mint", "")
+        dev    = event.get("dev", "")
         print(f"[collector] {status} | {name} ({ticker}) | mint={mint[:8]}")
-        # Write to Neo4j (both skipped and queued — all are training data)
+
+        # Write token to Neo4j
         await ingester.upsert_token(event)
+
+        # Profile the dev wallet (async, non-blocking to not slow down collection)
+        if dev:
+            asyncio.create_task(_profile_and_store_wallet(dev, ingester, driver))
 
     async def on_graduation(event):
         sig  = event.get("signature", "")[:12]
