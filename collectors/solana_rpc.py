@@ -221,30 +221,25 @@ async def get_wallet_profile(address: str, driver=None) -> dict:
 
     log.info("Profiling wallet: %s", address[:8])
 
-    # Run all lookups concurrently
-    rc_task      = _rugcheck_wallet(address)
-    chain_task   = _count_wallet_launches(address)
-    neo4j_task   = _get_neo4j_wallet_history(address, driver) if driver else asyncio.sleep(0)
+    # rugcheck wallet API gives us launch/rug counts for free (1 HTTP call).
+    # Chain scan (_count_wallet_launches) makes up to 20 Solana RPC calls per wallet
+    # and causes 429s on the free public RPC — skip it entirely.
+    rc_task    = _rugcheck_wallet(address)
+    neo4j_task = _get_neo4j_wallet_history(address, driver) if driver else asyncio.sleep(0)
 
-    rc_data, chain_data, neo4j_data = await asyncio.gather(
-        rc_task, chain_task, neo4j_task
-    )
+    rc_data, neo4j_data = await asyncio.gather(rc_task, neo4j_task)
     if neo4j_data is None:
         neo4j_data = {}
 
-    # Merge data sources — Neo4j is most reliable for wallets we've seen,
-    # rugcheck API for absolute counts, chain scan as fallback
     rc_launches  = rc_data.get("rc_creator_launches", 0)
     rc_rugs      = rc_data.get("rc_creator_rugs", 0)
     neo_launches = neo4j_data.get("neo4j_launches", 0)
     neo_grad     = neo4j_data.get("neo4j_graduated", 0)
 
-    # Best launch count: prefer rugcheck (has full history), fallback to neo4j
-    total_launches  = max(rc_launches, neo_launches,
-                          chain_data.get("launches_observed", 0))
-    rugs_launched   = rc_rugs
-    grad_launched   = neo_grad  # rugcheck wallet API doesn't expose grad count directly
-    grad_rate       = round(grad_launched / total_launches, 3) if total_launches > 0 else 0.0
+    total_launches = max(rc_launches, neo_launches)
+    rugs_launched  = rc_rugs
+    grad_launched  = neo_grad
+    grad_rate      = round(grad_launched / total_launches, 3) if total_launches > 0 else 0.0
 
     profile = {
         "address":           address,
