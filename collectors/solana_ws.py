@@ -50,11 +50,14 @@ PUMPFUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY", "")
 
 def _get_ws_url() -> str:
-    if HELIUS_API_KEY:
-        return f"wss://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
+    # Always use free public RPC for WebSocket subscription —
+    # logsSubscribe fires on EVERY pump.fun tx (hundreds/hour).
+    # Using Helius here burns ~700K credits/month on free tier.
     return "wss://api.mainnet-beta.solana.com"
 
 def _get_rpc_url() -> str:
+    # Use Helius only for getTransaction — called once per NEW token create,
+    # not every trade. ~300-500 calls/hour = ~10K credits/day = safe on free tier.
     if HELIUS_API_KEY:
         return f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
     return "https://api.mainnet-beta.solana.com"
