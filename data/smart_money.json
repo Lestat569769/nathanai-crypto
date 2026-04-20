@@ -1,0 +1,11 @@
+{
+  "_comment": "Manually curated smart money wallets. Add addresses here to permanently track them.",
+  "_labels": {
+    "WHALE":           "High-capital trader, consistently picks early winners",
+    "KOL":             "Key Opinion Leader — social influence drives buys",
+    "SERIAL_DEPLOYER": "Dev wallet with proven graduation track record",
+    "SNIPER":          "Consistently first buyer — likely inside information",
+    "BANNED":          "Known rug deployer — hard-skip all their launches"
+  },
+  "wallets": {}
+}
