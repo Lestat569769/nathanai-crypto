@@ -53,8 +53,10 @@ A fully automated Solana trading bot that:
 | Service | Purpose | Status |
 |---------|---------|--------|
 | rugcheck.xyz | Rug detection hard-skip gate | ✅ Working |
-| pump.fun WebSocket | New token events | ⚠️ Cloudflare 530 — pending Helius gRPC fix |
-| **Helius LaserStream gRPC** | Replace pump.fun WS — real-time mint events | 🔄 API key being created |
+| **PumpPortal WebSocket** | New token events — free, no API key, no credits | ✅ LIVE — receiving real tokens |
+| Helius RPC | getTransaction fallback (0 credits if unused) | ✅ Configured (key: Stagbog) |
+| PumpPortal Trading API | On-chain buy execution (Phase 4) | Pending |
+| Solana public RPC | Dev wallet history lookup | ✅ Built |
 | DexScreener | Post-graduation price tracking | Pending build |
 | CoinGecko | SOL price + market context | Pending build |
 | alternative.me | Fear & Greed index | Pending build |
@@ -122,7 +124,10 @@ qwen3:8b (no-think) → BUY/SKIP + confidence + JSON reasoning
 |------|------|-------|
 | MASTER_BUILD_PLAN.md | 2026-04-19 | Full 14-section plan |
 | collectors/rugcheck.py | 2026-04-19 | Hard skip gate — mint_auth, freeze_auth, top_holder, risk_penalty |
-| collectors/pumpfun_ws.py | 2026-04-19 | WebSocket listener + dispatch — blocked by Cloudflare 530 |
+| collectors/pumpfun_ws.py | 2026-04-19 | WebSocket listener (kept as reference — blocked by Cloudflare 530) |
+| collectors/pumpportal_ws.py | 2026-04-20 | **ACTIVE** — PumpPortal WebSocket, free, live, real token names |
+| collectors/solana_ws.py | 2026-04-20 | Solana RPC fallback (kept for reference) |
+| collectors/solana_rpc.py | 2026-04-20 | Dev wallet profiler — rugcheck wallet API + tx history |
 | Docker stack | 2026-04-20 | docker-compose.yml, Dockerfile, requirements.txt |
 | graph/schema.py | 2026-04-20 | All constraints, indexes, vector indexes — applied to live Neo4j |
 | graph/ingest.py | 2026-04-20 | GraphIngester: upsert_token, upsert_wallet, write_signal, write_trade, vector similarity search |
@@ -133,14 +138,12 @@ qwen3:8b (no-think) → BUY/SKIP + confidence + JSON reasoning
 
 | Item | Blocked By | Notes |
 |------|-----------|-------|
-| collectors/helius_grpc.py | Helius API key (being created now) | Replaces pump.fun WebSocket — LaserStream gRPC |
+| collectors/sol_context.py | — | SOL price + fear/greed + RSS news |
 
 ### 📋 PENDING — Phase 1 (Data Pipeline)
 
 | Item | Priority | Notes |
 |------|----------|-------|
-| collectors/helius_grpc.py | HIGH | Wire in once API key received |
-| collectors/solana_rpc.py | HIGH | Dev wallet history — tx lookup via public RPC |
 | collectors/sol_context.py | MEDIUM | CoinGecko SOL price + alternative.me fear/greed + RSS |
 | collectors/dexscreener.py | MEDIUM | Post-graduation price/volume tracking |
 | collectors/smart_money.py | HIGH | Whale/KOL wallet reputation cache |
