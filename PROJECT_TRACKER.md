@@ -1,5 +1,5 @@
 # NathanAI Crypto Bot — Project Tracker
-**Last Updated:** 2026-04-20
+**Last Updated:** 2026-04-21
 **Status:** Active Development — Phase 1 (Data Pipeline)
 
 ---
@@ -125,9 +125,10 @@ qwen3:8b (no-think) → BUY/SKIP + confidence + JSON reasoning
 | MASTER_BUILD_PLAN.md | 2026-04-19 | Full 14-section plan |
 | collectors/rugcheck.py | 2026-04-19 | Hard skip gate — mint_auth, freeze_auth, top_holder, risk_penalty |
 | collectors/pumpfun_ws.py | 2026-04-19 | WebSocket listener (kept as reference — blocked by Cloudflare 530) |
-| collectors/pumpportal_ws.py | 2026-04-20 | **ACTIVE** — PumpPortal WebSocket, free, live, real token names |
+| collectors/pumpportal_ws.py | 2026-04-21 | **ACTIVE** — PumpPortal WS, uri metadata fetch, subscribeTokenTrade, migration field logging |
 | collectors/solana_ws.py | 2026-04-20 | Solana RPC fallback (kept for reference) |
 | collectors/solana_rpc.py | 2026-04-20 | Dev wallet profiler — rugcheck wallet API + tx history |
+| collectors/sol_context.py | 2026-04-21 | SOL price (CoinGecko) + Fear & Greed (alternative.me) + RSS headlines, 5-min cache |
 | Docker stack | 2026-04-20 | docker-compose.yml, Dockerfile, requirements.txt |
 | graph/schema.py | 2026-04-20 | All constraints, indexes, vector indexes — applied to live Neo4j |
 | graph/ingest.py | 2026-04-20 | GraphIngester: upsert_token, upsert_wallet, write_signal, write_trade, vector similarity search |
@@ -138,15 +139,15 @@ qwen3:8b (no-think) → BUY/SKIP + confidence + JSON reasoning
 
 | Item | Blocked By | Notes |
 |------|-----------|-------|
-| collectors/sol_context.py | — | SOL price + fear/greed + RSS news |
+| collectors/dexscreener.py | — | Post-graduation price/volume tracking |
+| collectors/smart_money.py | — | Whale/KOL wallet reputation cache |
 
 ### 📋 PENDING — Phase 1 (Data Pipeline)
 
 | Item | Priority | Notes |
 |------|----------|-------|
-| collectors/sol_context.py | MEDIUM | CoinGecko SOL price + alternative.me fear/greed + RSS |
-| collectors/dexscreener.py | MEDIUM | Post-graduation price/volume tracking |
 | collectors/smart_money.py | HIGH | Whale/KOL wallet reputation cache |
+| collectors/dexscreener.py | MEDIUM | Post-graduation price/volume tracking |
 | scripts/verify_setup.py | LOW | Connection health check script |
 
 ### 📋 PENDING — Phase 2 (Historical Backfill)
@@ -252,11 +253,12 @@ nathanai-crypto/
 ├── collectors/
 │   ├── __init__.py
 │   ├── rugcheck.py             ✅ hard skip gate
-│   ├── pumpfun_ws.py           ✅ WebSocket (blocked — Cloudflare 530)
-│   ├── helius_grpc.py          🔄 NEXT — LaserStream gRPC
-│   ├── solana_rpc.py           📋 pending
-│   ├── sol_context.py          📋 pending
-│   ├── dexscreener.py          📋 pending
+│   ├── pumpfun_ws.py           ✅ WebSocket (blocked — Cloudflare 530, kept as reference)
+│   ├── pumpportal_ws.py        ✅ ACTIVE — uri metadata fetch, subscribeTokenTrade, migration logging
+│   ├── solana_ws.py            ✅ Solana RPC fallback (kept for reference)
+│   ├── solana_rpc.py           ✅ dev wallet profiler
+│   ├── sol_context.py          ✅ SOL price + fear/greed + RSS headlines
+│   ├── dexscreener.py          🔄 NEXT — post-graduation price tracking
 │   └── smart_money.py          📋 pending
 │
 ├── graph/
