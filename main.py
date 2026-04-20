@@ -10,6 +10,15 @@ import argparse
 import asyncio
 import logging
 import sys
+from pathlib import Path
+
+# Load .env before anything else so all os.getenv() calls pick up the values.
+# python-dotenv is already in requirements.txt; silently skip if not installed.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass
 
 log = logging.getLogger("nathanai.crypto.main")
 
