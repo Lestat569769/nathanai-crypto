@@ -17,6 +17,7 @@ Risk signals extracted:
   - risks             : list of flagged issues with severity levels
   - creator_history   : prior tokens by same dev (graduates vs rugs)
 """
+import asyncio
 import httpx
 import logging
 import time
@@ -37,17 +38,18 @@ SEVERITY_WEIGHTS = {
 }
 
 
-def fetch_report(mint: str) -> Optional[dict]:
-    """Fetch raw rugcheck report for a token mint address."""
+async def fetch_report(mint: str) -> Optional[dict]:
+    """Fetch raw rugcheck report for a token mint address (async — non-blocking)."""
     url = f"{API_BASE}/tokens/{mint}/report"
     for attempt in range(MAX_RETRIES):
         try:
-            resp = httpx.get(url, timeout=TIMEOUT)
+            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+                resp = await client.get(url)
             if resp.status_code == 200:
                 return resp.json()
             elif resp.status_code == 429:
                 log.warning("rugcheck rate limited, sleeping %ds", RETRY_DELAY * 2)
-                time.sleep(RETRY_DELAY * 2)
+                await asyncio.sleep(RETRY_DELAY * 2)
             elif resp.status_code == 404:
                 log.debug("rugcheck: token %s not indexed yet", mint[:8])
                 return None
@@ -56,7 +58,7 @@ def fetch_report(mint: str) -> Optional[dict]:
                 return None
         except httpx.TimeoutException:
             log.warning("rugcheck timeout (attempt %d/%d) for %s", attempt + 1, MAX_RETRIES, mint[:8])
-            time.sleep(RETRY_DELAY)
+            await asyncio.sleep(RETRY_DELAY)
         except Exception as e:
             log.error("rugcheck error for %s: %s", mint[:8], e)
             return None
@@ -178,17 +180,17 @@ def _empty_result() -> dict:
     }
 
 
-def check_token(mint: str) -> dict:
+async def check_token(mint: str) -> dict:
     """
-    Main entry point. Fetch + parse a rugcheck report.
+    Main entry point. Fetch + parse a rugcheck report (async — non-blocking).
 
     Returns parsed signals dict. Callers should check `hard_skip` first:
-        result = check_token(mint)
+        result = await check_token(mint)
         if result["hard_skip"]:
             return SKIP  # don't waste LLM inference on this
     """
     log.info("rugcheck: fetching report for %s...", mint[:8])
-    raw = fetch_report(mint)
+    raw = await fetch_report(mint)
     result = parse_report(raw)
 
     if result["hard_skip"]:

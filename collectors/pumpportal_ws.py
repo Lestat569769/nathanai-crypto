@@ -217,7 +217,7 @@ async def _handle_new_token(msg: dict, ws, on_new_token: Callable, on_trade):
              name or "?", ticker or "?", mint[:8], dev[:8] if dev else "?")
 
     # ── rugcheck hard skip gate ───────────────────────────────────────────────
-    rc = check_token(mint)
+    rc = await check_token(mint)
 
     token_event = {
         # Identity
