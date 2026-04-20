@@ -31,11 +31,13 @@ from typing import Callable, Optional
 import httpx
 import websockets
 
-from collectors.rugcheck import check_token, format_for_prompt
-
 log = logging.getLogger("nathanai.crypto.pumpportal_ws")
 
 WS_URL = "wss://pumpportal.fun/api/data"
+
+# Subscribe to bonding-curve trades only for tokens with a real initial buy.
+# Keeps WS message volume manageable — pure spam tokens (0 SOL dev buy) ignored.
+MIN_SUBSCRIBE_SOL = 0.05
 
 # How long to wait for the metadata URI fetch (pump.fun IPFS can be slow)
 URI_FETCH_TIMEOUT = 8.0
@@ -199,72 +201,60 @@ async def _handle_new_token(msg: dict, ws, on_new_token: Callable, on_trade):
     """
     Process a new token creation event from PumpPortal.
 
-    PumpPortal provides all fields inline — no getTransaction needed:
-      mint, name, symbol, uri, traderPublicKey (dev), signature,
-      initialBuy, solAmount, marketCapSol, bondingCurveKey,
-      vSolInBondingCurve, vTokensInBondingCurve, tokenTotalSupply
+    Rugcheck is NOT called here — it runs in main.py after RUGCHECK_DELAY_SECS
+    so the API has time to index the token and we only check pre-filtered tokens.
     """
-    mint   = msg.get("mint", "")
-    name   = msg.get("name", "") or ""
-    ticker = msg.get("symbol", "") or ""
-    dev    = msg.get("traderPublicKey", "") or ""
-    uri    = msg.get("uri", "") or ""
+    mint        = msg.get("mint", "")
+    name        = msg.get("name", "") or ""
+    ticker      = msg.get("symbol", "") or ""
+    dev         = msg.get("traderPublicKey", "") or ""
+    uri         = msg.get("uri", "") or ""
+    initial_buy = float(msg.get("solAmount", 0.0) or 0.0)
 
     if not mint:
         return
 
-    log.info("NEW TOKEN: %s (%s) mint=%s dev=%s",
-             name or "?", ticker or "?", mint[:8], dev[:8] if dev else "?")
-
-    # ── rugcheck hard skip gate ───────────────────────────────────────────────
-    rc = await check_token(mint)
+    log.info("NEW TOKEN: %s (%s) mint=%s dev=%s buy=%.4f SOL",
+             name or "?", ticker or "?", mint[:8], dev[:8] if dev else "?", initial_buy)
 
     token_event = {
         # Identity
-        "mint":                    mint,
-        "name":                    name,
-        "ticker":                  ticker,
-        "dev":                     dev,
-        "uri":                     uri,
-        "signature":               msg.get("signature", ""),
+        "mint":               mint,
+        "name":               name,
+        "ticker":             ticker,
+        "dev":                dev,
+        "uri":                uri,
+        "signature":          msg.get("signature", ""),
         # Market data at launch
-        "initial_buy_sol":         msg.get("solAmount", 0.0),
-        "market_cap_sol":          msg.get("marketCapSol", 0.0),
-        "bonding_curve_key":       msg.get("bondingCurveKey", ""),
-        "v_sol_in_curve":          msg.get("vSolInBondingCurve", 0.0),
-        "v_tokens_in_curve":       msg.get("vTokensInBondingCurve", 0),
-        "token_total_supply":      msg.get("tokenTotalSupply", 0),
-        # Social metadata — populated async below (may be empty initially)
-        "description":             "",
-        "twitter":                 "",
-        "telegram":                "",
-        "website":                 "",
-        # Rugcheck
-        "rugcheck":                rc,
-        "rugcheck_prompt":         format_for_prompt(rc),
-        "hard_skip":               rc["hard_skip"],
+        "initial_buy_sol":    initial_buy,
+        "market_cap_sol":     float(msg.get("marketCapSol", 0.0) or 0.0),
+        "bonding_curve_key":  msg.get("bondingCurveKey", ""),
+        "v_sol_in_curve":     float(msg.get("vSolInBondingCurve", 0.0) or 0.0),
+        "v_tokens_in_curve":  int(msg.get("vTokensInBondingCurve", 0) or 0),
+        "token_total_supply": int(msg.get("tokenTotalSupply", 0) or 0),
+        # Social metadata — populated async below
+        "description": "",
+        "twitter":     "",
+        "telegram":    "",
+        "website":     "",
+        # Rugcheck pending — main.py schedules a delayed check after RUGCHECK_DELAY_SECS
+        "rugcheck":        {},
+        "rugcheck_prompt": "",
+        "hard_skip":       False,
     }
 
-    if rc["hard_skip"]:
-        log.warning("HARD SKIP %s (%s) — rug signals: %s",
-                    name or mint[:8], ticker, rc.get("risk_flags", []))
-        token_event["skip_reason"] = "rugcheck_hard_skip"
-    else:
-        # Subscribe to bonding curve trades for this token (same WS connection)
-        if on_trade:
-            try:
-                await ws.send(json.dumps({
-                    "method": "subscribeTokenTrade",
-                    "keys":   [mint],
-                }))
-                log.debug("Subscribed to trades for %s (%s)", ticker or "?", mint[:8])
-            except Exception as e:
-                log.debug("subscribeTokenTrade failed for %s: %s", mint[:8], e)
+    # Subscribe to trades only for tokens with a real buy — filters WS message volume
+    if on_trade and initial_buy >= MIN_SUBSCRIBE_SOL:
+        try:
+            await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [mint]}))
+            log.debug("Trade sub: %s (%s)", ticker or "?", mint[:8])
+        except Exception as e:
+            log.debug("subscribeTokenTrade failed for %s: %s", mint[:8], e)
 
-    # Emit the event immediately — don't block on URI fetch
+    # Emit immediately — rugcheck happens later in main.py
     await _call(on_new_token, token_event)
 
-    # Fetch metadata URI in the background so it doesn't delay the pipeline
+    # Fetch URI metadata in background (social links, description)
     if uri:
         asyncio.create_task(_fetch_and_update_metadata(uri, token_event, on_new_token))
 

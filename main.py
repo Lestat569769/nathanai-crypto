@@ -45,8 +45,12 @@ log = logging.getLogger("nathanai.crypto.main")
 
 BUY_CONFIDENCE_THRESHOLD = 0.75   # minimum LLM confidence to act on BUY
 
-# Stage 1 — launch filter
+# Stage 1 — launch pre-filter (applied instantly, no rugcheck)
 MIN_LAUNCH_BUY_SOL = 0.1          # dev must invest at least this much at launch
+
+# Rugcheck delay — wait this long before calling the API so it has time to index
+# the token. Also limits rugcheck calls to pre-filtered tokens only.
+RUGCHECK_DELAY_SECS = 90
 
 # Stage 2 — bonding curve milestone triggers (SOL in curve)
 GRADUATION_TARGET  = 85.0         # ~$69K market cap = graduation to Raydium
@@ -286,9 +290,10 @@ async def run_paper():
     except Exception as e:
         log.warning("initial market context fetch failed: %s", e)
 
-    print("[paper] Pipeline ready — quality-filtered LLM decisions (paper trade mode)")
+    print("[paper] Pipeline ready — pre-filter → delayed rugcheck → LLM (paper trade mode)")
     print(f"[paper] {sm.get_cache().summary()}")
-    print(f"[paper] Launch filter: initial_buy >= {MIN_LAUNCH_BUY_SOL} SOL")
+    print(f"[paper] Pre-filter:  initial_buy >= {MIN_LAUNCH_BUY_SOL} SOL  (no rugcheck below this)")
+    print(f"[paper] Rugcheck:    {RUGCHECK_DELAY_SECS}s after launch  (gives API time to index)")
     print(f"[paper] Grad triggers: {GRAD_THRESHOLDS} SOL in bonding curve")
     if market_ctx_ref[0]:
         print(f"[paper] {market_ctx_ref[0].get('context_summary','')}")
@@ -300,6 +305,7 @@ async def run_paper():
     llm_queue   = asyncio.Queue()
     llm_sent    = {}       # mint → last trigger queued (avoids duplicate evals)
     token_cache = {}       # mint → event dict (for graduation re-evaluation)
+    rugcheck_sem = asyncio.Semaphore(2)  # max 2 concurrent rugcheck HTTP calls
 
     async def _llm_worker():
         while True:
@@ -320,7 +326,7 @@ async def run_paper():
         if not mint or not ollama_ok:
             return
         if llm_sent.get(mint) == trigger:
-            return   # already queued for this trigger
+            return
         if llm_queue.qsize() >= LLM_QUEUE_MAX:
             log.debug("LLM queue full — dropping %s [%s]", mint[:8], trigger)
             return
@@ -329,9 +335,63 @@ async def run_paper():
         log.info("LLM queued [%s] %s (%s) — %d in queue",
                  trigger, event.get("name","?"), event.get("ticker","?"), llm_queue.qsize())
 
+    async def _delayed_rugcheck(event: dict):
+        """
+        Wait RUGCHECK_DELAY_SECS, then run rugcheck for one pre-filtered token.
+        - Delay gives rugcheck.xyz time to index the brand-new token (avoids null fields).
+        - Only called for tokens that already passed the initial_buy pre-filter,
+          so total rugcheck call volume = a fraction of all launches.
+        """
+        await asyncio.sleep(RUGCHECK_DELAY_SECS)
+        mint   = event.get("mint", "")
+        name   = event.get("name", "?") or "?"
+        ticker = event.get("ticker", "?") or "?"
+
+        if not mint or mint not in token_cache:
+            return  # already graduated or evicted
+
+        from collectors.rugcheck import check_token, format_for_prompt
+
+        async with rugcheck_sem:
+            try:
+                rc = await check_token(mint)
+            except Exception as e:
+                log.warning("rugcheck error for %s: %s", mint[:8], e)
+                # Don't block the token on rugcheck failure — pass with empty result
+                rc = {
+                    "hard_skip": False, "risk_flags": [], "score_normalised": None,
+                    "top_holder_pct": 0.0, "lp_locked": False, "insider_detected": False,
+                    "creator_graduates": 0, "creator_total": 0, "creator_rugs": 0,
+                    "creator_grad_rate": 0.0, "risk_penalty": 0,
+                }
+
+        # Update cached event with rugcheck result
+        cached = token_cache.get(mint)
+        if not cached:
+            return  # graduated while we were waiting
+        cached["rugcheck"]        = rc
+        cached["rugcheck_prompt"] = format_for_prompt(rc)
+        cached["hard_skip"]       = rc["hard_skip"]
+        await ingester.upsert_token(cached)
+
+        if rc["hard_skip"]:
+            flags = ", ".join(f["name"] for f in rc.get("risk_flags", [])[:3]) or "flagged"
+            print(f"[paper] HARD SKIP  | {name} ({ticker}) | mint={mint[:8]} | {flags}")
+            token_cache.pop(mint, None)
+            return
+
+        print(f"[paper] QUEUED     | {name} ({ticker}) | mint={mint[:8]} | rugcheck OK → LLM")
+        await _enqueue(cached, "launch")
+
     # ── New token handler ─────────────────────────────────────────────────
     async def on_new_token(event):
         if event.get("_metadata_update"):
+            mint = event.get("mint", "")
+            if mint and mint in token_cache:
+                # Merge social fields into cached event
+                for k in ("description", "twitter", "telegram", "website"):
+                    if event.get(k):
+                        token_cache[mint][k] = event[k]
             await ingester.upsert_token(event)
             return
 
@@ -345,27 +405,23 @@ async def run_paper():
 
         if sm.is_banned(dev):
             print(f"[paper] BANNED DEV | {name} ({ticker}) | mint={mint[:8]}")
-        elif event.get("hard_skip"):
-            print(f"[paper] HARD SKIP  | {name} ({ticker}) | mint={mint[:8]}")
-        else:
-            label = f" ★ {event['dev_smart_money']['label']}" if event.get("dev_smart_money") else ""
-            is_sm = bool(event.get("dev_smart_money"))
-            passes_filter = initial_buy >= MIN_LAUNCH_BUY_SOL or is_sm
+            return
 
-            if passes_filter:
-                print(f"[paper] QUEUED     | {name} ({ticker}) | mint={mint[:8]} | "
-                      f"{initial_buy:.3f} SOL buy{label}")
-                await _enqueue(event, "launch")
-            else:
-                print(f"[paper] FILTERED   | {name} ({ticker}) | mint={mint[:8]} | "
-                      f"{initial_buy:.3f} SOL buy (< {MIN_LAUNCH_BUY_SOL} SOL)")
+        is_sm = bool(event.get("dev_smart_money"))
+        if initial_buy < MIN_LAUNCH_BUY_SOL and not is_sm:
+            # Below threshold — ignore entirely, no rugcheck, no storage
+            return
 
-            # Cache for graduation trigger regardless of filter
-            token_cache[mint] = dict(event)
+        # Passes pre-filter — cache it and schedule a delayed rugcheck
+        label = f" ★ {event['dev_smart_money']['label']}" if is_sm else ""
+        print(f"[paper] WATCH      | {name} ({ticker}) | mint={mint[:8]} | "
+              f"{initial_buy:.3f} SOL — rugcheck in {RUGCHECK_DELAY_SECS}s{label}")
 
+        token_cache[mint] = dict(event)
         await ingester.upsert_token(event)
         if dev:
             asyncio.create_task(_profile_and_store_wallet(dev, ingester, driver))
+        asyncio.create_task(_delayed_rugcheck(event))
 
     # ── Trade event handler ───────────────────────────────────────────────
     async def on_trade(event):
