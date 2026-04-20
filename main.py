@@ -302,10 +302,11 @@ async def run_paper():
     asyncio.create_task(_refresh_market_ctx_loop(market_ctx_ref))
 
     # ── LLM queue (single worker) ─────────────────────────────────────────
-    llm_queue   = asyncio.Queue()
-    llm_sent    = {}       # mint → last trigger queued (avoids duplicate evals)
-    token_cache = {}       # mint → event dict (for graduation re-evaluation)
-    rugcheck_sem = asyncio.Semaphore(2)  # max 2 concurrent rugcheck HTTP calls
+    llm_queue      = asyncio.Queue()
+    milestones_hit = {}    # mint → set of trigger strings already queued
+    token_cache    = {}    # mint → event dict (for graduation re-evaluation)
+    rugcheck_sem   = asyncio.Semaphore(2)   # max 2 concurrent rugcheck HTTP calls
+    wallet_sem     = asyncio.Semaphore(1)   # serial wallet profiling — avoids RPC 429
 
     async def _llm_worker():
         while True:
@@ -321,16 +322,18 @@ async def run_paper():
     asyncio.create_task(_llm_worker())
 
     async def _enqueue(event: dict, trigger: str):
-        """Add to LLM queue, respecting deduplication and capacity limits."""
+        """Add to LLM queue. Each mint+trigger pair is queued at most once."""
         mint = event.get("mint", "")
         if not mint or not ollama_ok:
             return
-        if llm_sent.get(mint) == trigger:
+        # Use a set per mint so ALL previously-triggered milestones are remembered
+        hits = milestones_hit.setdefault(mint, set())
+        if trigger in hits:
             return
         if llm_queue.qsize() >= LLM_QUEUE_MAX:
             log.debug("LLM queue full — dropping %s [%s]", mint[:8], trigger)
             return
-        llm_sent[mint] = trigger
+        hits.add(trigger)
         await llm_queue.put((event, trigger))
         log.info("LLM queued [%s] %s (%s) — %d in queue",
                  trigger, event.get("name","?"), event.get("ticker","?"), llm_queue.qsize())
@@ -383,6 +386,12 @@ async def run_paper():
         print(f"[paper] QUEUED     | {name} ({ticker}) | mint={mint[:8]} | rugcheck OK → LLM")
         await _enqueue(cached, "launch")
 
+    async def _rate_limited_wallet_profile(dev: str, ingester, driver):
+        """Wallet profiling serialised through wallet_sem to avoid Solana RPC 429."""
+        async with wallet_sem:
+            await _profile_and_store_wallet(dev, ingester, driver)
+            await asyncio.sleep(2)  # min 2s between RPC calls
+
     # ── New token handler ─────────────────────────────────────────────────
     async def on_new_token(event):
         if event.get("_metadata_update"):
@@ -420,7 +429,7 @@ async def run_paper():
         token_cache[mint] = dict(event)
         await ingester.upsert_token(event)
         if dev:
-            asyncio.create_task(_profile_and_store_wallet(dev, ingester, driver))
+            asyncio.create_task(_rate_limited_wallet_profile(dev, ingester, driver))
         asyncio.create_task(_delayed_rugcheck(event))
 
     # ── Trade event handler ───────────────────────────────────────────────
@@ -455,16 +464,17 @@ async def run_paper():
             cached["v_sol_in_curve"] = v_sol
             cached["market_cap_sol"] = event.get("market_cap_sol", cached.get("market_cap_sol", 0))
 
+            hits = milestones_hit.get(mint, set())
             for threshold in GRAD_THRESHOLDS:
                 trig = f"{threshold:.0f}sol"
-                if v_sol >= threshold and llm_sent.get(mint, "") != trig:
-                    pct = v_sol / GRADUATION_TARGET * 100
+                if v_sol >= threshold and trig not in hits:
+                    pct    = v_sol / GRADUATION_TARGET * 100
                     name   = cached.get("name", "?") or "?"
                     ticker = cached.get("ticker", "?") or "?"
                     print(f"[paper] MILESTONE  | {name} ({ticker}) | "
                           f"{v_sol:.0f}/{GRADUATION_TARGET:.0f} SOL ({pct:.0f}%) — re-evaluating")
                     await _enqueue(cached, trig)
-                    break  # only trigger lowest unmet threshold per trade event
+                    break  # only fire the lowest unmet threshold per trade event
 
     # ── Graduation handler ────────────────────────────────────────────────
     async def on_graduation(event):
@@ -474,7 +484,8 @@ async def run_paper():
         print(f"[paper] GRADUATED  | {name} | mint={mint[:8] if mint else '?'} | 🎓 {pct}%")
         if mint:
             await ingester.mark_graduated(mint)
-            token_cache.pop(mint, None)   # free memory
+            token_cache.pop(mint, None)
+            milestones_hit.pop(mint, None)
 
     await listen(on_new_token=on_new_token, on_trade=on_trade, on_graduation=on_graduation)
 
