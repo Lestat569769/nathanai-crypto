@@ -23,9 +23,19 @@ def parse_args():
 
 
 async def run_collect():
-    from collectors.pumpfun_ws import PumpFunCollector
-    collector = PumpFunCollector()
-    await collector.run()
+    from collectors.pumpfun_ws import listen
+
+    def on_new_token(event):
+        status = "HARD SKIP" if event.get("hard_skip") else "QUEUED"
+        print(f"[collector] {status} | {event['name']} ({event['ticker']}) | mint={event['mint'][:8]}")
+
+    def on_trade(event):
+        pass  # TODO: update bonding curve snapshot in Neo4j
+
+    def on_graduation(event):
+        print(f"[collector] GRADUATED | {event.get('name')} | mint={event.get('mint','')[:8]}")
+
+    await listen(on_new_token=on_new_token, on_trade=on_trade, on_graduation=on_graduation)
 
 
 async def run_validate():

@@ -26,6 +26,17 @@ log = logging.getLogger("nathanai.crypto.pumpfun_ws")
 
 WS_URL = "wss://frontend-api.pump.fun/ws"
 
+# Browser-like headers — required to pass Cloudflare (HTTP 530 without these)
+WS_HEADERS = {
+    "Origin":                    "https://pump.fun",
+    "Host":                      "frontend-api.pump.fun",
+    "User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept-Language":           "en-US,en;q=0.9",
+    "Cache-Control":             "no-cache",
+    "Pragma":                    "no-cache",
+    "Sec-WebSocket-Extensions":  "permessage-deflate; client_max_window_bits",
+}
+
 
 async def listen(
     on_new_token:  Callable[[dict], None],
@@ -38,23 +49,49 @@ async def listen(
     on_new_token  — called for every new token launch (post rugcheck gate)
     on_trade      — called for every bonding curve trade (optional)
     on_graduation — called when a token graduates to Raydium (optional)
+
+    NOTE: pump.fun uses Cloudflare with TLS fingerprinting (JA3/JA4).
+    Headers alone are insufficient. Production fix: Helius Yellowstone gRPC
+    (reads new token mints directly from Solana — no pump.fun API needed).
+    This implementation uses exponential backoff while that is integrated.
     """
-    log.info("Connecting to pump.fun WebSocket: %s", WS_URL)
-    async for ws in websockets.connect(WS_URL, ping_interval=20, ping_timeout=10):
+    backoff = 5
+    max_backoff = 300  # cap at 5 minutes between retries
+
+    while True:
         try:
-            log.info("pump.fun WebSocket connected")
-            async for raw in ws:
-                try:
-                    msg = json.loads(raw)
-                    _dispatch(msg, on_new_token, on_trade, on_graduation)
-                except json.JSONDecodeError:
-                    log.debug("non-JSON message: %s", raw[:80])
+            log.info("Connecting to pump.fun WebSocket: %s", WS_URL)
+            async with websockets.connect(
+                WS_URL,
+                additional_headers=WS_HEADERS,
+                ping_interval=20,
+                ping_timeout=10,
+            ) as ws:
+                log.info("pump.fun WebSocket connected")
+                backoff = 5  # reset on successful connection
+                async for raw in ws:
+                    try:
+                        msg = json.loads(raw)
+                        _dispatch(msg, on_new_token, on_trade, on_graduation)
+                    except json.JSONDecodeError:
+                        log.debug("non-JSON message: %s", raw[:80])
+
+        except websockets.exceptions.InvalidStatus as e:
+            log.warning(
+                "pump.fun rejected connection (HTTP %s) — "
+                "Cloudflare TLS fingerprint block. "
+                "TODO: switch to Helius Yellowstone gRPC. "
+                "Retrying in %ds.",
+                e.response.status_code if hasattr(e, "response") else "?",
+                backoff,
+            )
         except websockets.ConnectionClosed:
-            log.warning("pump.fun WebSocket disconnected — reconnecting in 3s")
-            await asyncio.sleep(3)
+            log.warning("pump.fun WebSocket disconnected — retrying in %ds", backoff)
         except Exception as e:
-            log.error("WebSocket error: %s — reconnecting in 5s", e)
-            await asyncio.sleep(5)
+            log.error("WebSocket error: %s — retrying in %ds", e, backoff)
+
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, max_backoff)
 
 
 def _dispatch(msg, on_new_token, on_trade, on_graduation):
